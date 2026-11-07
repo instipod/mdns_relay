@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>mDNS Relay</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>mDNS Relay</h1>
+    <p id="summary" class="summary" aria-live="polite"></p>
+    <span id="connection" class="connection" data-state="connecting">Connecting</span>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" id="tab-services" aria-controls="view-services" aria-selected="true">Services</button>
+    <button role="tab" id="tab-rules" aria-controls="view-rules" aria-selected="false">Rules</button>
+    <button role="tab" id="tab-interfaces" aria-controls="view-interfaces" aria-selected="false">Interfaces</button>
+    <button role="tab" id="tab-activity" aria-controls="view-activity" aria-selected="false">Activity</button>
+  </nav>
+
+  <main>
+    <section id="view-services" role="tabpanel" aria-labelledby="tab-services">
+      <div class="toolbar">
+        <label class="grow">
+          <span class="visually-hidden">Search services</span>
+          <input id="service-search" type="search" placeholder="Search by name, type, host or address">
+        </label>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Instance</th><th>Type</th><th>Interface</th><th>Host and addresses</th>
+              <th>Details</th><th>Relayed to</th><th><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="services-body"></tbody>
+        </table>
+      </div>
+      <p id="services-empty" class="empty" hidden></p>
+    </section>
+
+    <section id="view-rules" role="tabpanel" aria-labelledby="tab-rules" hidden>
+      <div class="toolbar">
+        <p class="hint grow">Nothing is relayed without a rule. A rule shows a service on the provider interface to devices on the client interface. Those client devices' own services stay hidden from the provider side.</p>
+        <button id="add-rule" class="primary">Add rule</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>On</th><th>Service type</th><th>Instance</th><th>Access</th><th>Note</th>
+              <th><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody id="rules-body"></tbody>
+        </table>
+      </div>
+      <p id="rules-empty" class="empty" hidden>No rules yet, so nothing is being relayed.</p>
+    </section>
+
+    <section id="view-interfaces" role="tabpanel" aria-labelledby="tab-interfaces" hidden>
+      <div class="toolbar">
+        <p id="interfaces-hint" class="hint grow"></p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Active</th><th>Name</th><th>Addresses</th><th class="num">Received</th>
+              <th class="num">Sent</th><th class="num">Dropped</th>
+            </tr>
+          </thead>
+          <tbody id="interfaces-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+      <div class="toolbar">
+        <label>
+          <span>Show</span>
+          <select id="activity-filter">
+            <option value="all">All</option>
+            <option value="relayed">Relayed</option>
+            <option value="dropped">Dropped</option>
+          </select>
+        </label>
+        <p class="hint grow">The most recent 500 relay decisions, newest first.</p>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Time</th><th>Result</th><th>Path</th><th>Message</th><th>Names</th></tr>
+          </thead>
+          <tbody id="activity-body"></tbody>
+        </table>
+      </div>
+      <p id="activity-empty" class="empty" hidden>No activity yet.</p>
+    </section>
+  </main>
+
+  <dialog id="rule-dialog" aria-labelledby="rule-dialog-title">
+    <form id="rule-form" method="dialog">
+      <h2 id="rule-dialog-title">Add rule</h2>
+      <label>Service type
+        <input name="service_type" required placeholder="_airplay._tcp" autocomplete="off">
+        <small>Use the exact type, or * for every service type.</small>
+      </label>
+      <label>Instance
+        <input name="instance_pattern" required value="*" autocomplete="off">
+        <small>A name or pattern, such as Living* . Use * for all instances.</small>
+      </label>
+      <div class="field-row">
+        <label>Provider interface
+          <select name="provider_iface" required></select>
+          <small>Where the service is.</small>
+        </label>
+        <label>Client interface
+          <select name="client_iface" required></select>
+          <small>Who can discover it.</small>
+        </label>
+      </div>
+      <label>Note
+        <input name="note" maxlength="200" autocomplete="off">
+      </label>
+      <p id="rule-error" class="error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" id="rule-cancel">Cancel</button>
+        <button type="submit" class="primary" id="rule-save">Save rule</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="login-dialog" aria-labelledby="login-title">
+    <form id="login-form" method="dialog">
+      <h2 id="login-title">Sign in</h2>
+      <label>Access token
+        <input name="token" type="password" required autocomplete="current-password">
+      </label>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="submit" class="primary">Sign in</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

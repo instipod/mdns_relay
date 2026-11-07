@@ -1,0 +1,23 @@
+[Unit]
+Description=Rule-based mDNS relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=mdns-relay
+# Set MDNS_RELAY_AUTH_TOKEN here if --http-host is not a loopback address.
+EnvironmentFile=-/etc/mdns-relay.env
+ExecStart=/usr/local/bin/mdns-relay --rules-file /var/lib/mdns-relay/rules.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

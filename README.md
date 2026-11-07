@@ -1,0 +1,105 @@
+# mDNS Relay
+
+Relays mDNS between Linux network interfaces, but only where you've created a rule. It includes a web interface for seeing the services on each network and managing those rules.
+
+With no rules, nothing is relayed.
+
+## Install and run
+
+Requires Linux and Python 3.11 or newer.
+
+```sh
+pip install .
+mdns-relay --rules-file /var/lib/mdns-relay/rules.json
+```
+
+Then open <http://127.0.0.1:8080/>.
+
+| Option | Default | Purpose |
+|---|---|---|
+| `--rules-file PATH` | `mdns-relay.json` | Where rules and interface settings are stored |
+| `--interface NAME` | All eligible | Use only this interface. Repeat for more. Fixes the set of interfaces, so the web interface can't change it |
+| `--http-host HOST` | `127.0.0.1` | Web interface bind address |
+| `--http-port PORT` | `8080` | Web interface port |
+| `--auth-token TOKEN` | None | Web interface token of 16 or more characters. Can also be set with `MDNS_RELAY_AUTH_TOKEN` |
+| `--insecure-no-auth` | Off | Allow a non-loopback web interface with no authentication |
+| `--no-browse` | Off | Don't send discovery queries; only listen |
+| `--log-level LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+
+Root isn't required. A systemd unit is in `deploy/mdns-relay.service`.
+
+To run it in Docker, use `--network host`, or the relay will only see the container's own interface.
+
+## How rules work
+
+A rule makes a service on a **provider** interface discoverable by devices on a **client** interface:
+
+```
+Service type: _airplay._tcp
+Instance:     Living*        (a pattern, or * for all)
+Provider:     eth0
+Client:       eth1
+```
+
+That rule relays queries from `eth1` to `eth0`, and responses from `eth0` to `eth1`. Devices on `eth1` can find the matching AirPlay devices. Services on `eth1` stay hidden from `eth0`. To share in both directions, add a second rule with the interfaces swapped.
+
+Filtering applies to each record, not each packet. Anything a rule doesn't permit is removed from the relayed copy, and if nothing is left, nothing is sent.
+
+Rule changes apply to the next packet, with no restart.
+
+### What is never relayed
+
+- Link-local addresses (`169.254.0.0/16`, `fe80::/10`), which don't work on another network
+- Reverse-lookup records and names outside `.local`
+- Name probes, so that devices on separate networks don't trigger name conflicts on each other
+- Malformed packets, packets not sent to the mDNS multicast group, and packets with a source port other than 5353
+
+When a query asks for a unicast reply, the relayed copy asks for a multicast reply instead, so the reply also passes through the rules.
+
+## What it sends without a rule
+
+The app sends its own discovery queries on active interfaces, so the Services list fills in without waiting for devices to announce themselves. They start frequently and settle at one round per minute. These queries stay on the interface they're sent on and are never relayed. Use `--no-browse` to turn them off.
+
+## Limitations
+
+- **Discovery only.** The relay makes a service discoverable but doesn't carry its traffic. Clients still need a route and firewall access to the service's IP address and port.
+- **No relaying to programs on the same host.** Relayed packets are sent with multicast loopback off, so Avahi running on the relay host won't see them.
+- **Legacy unicast clients aren't supported.** Their queries come from a port other than 5353, and replies couldn't get back through the relay.
+- **Sharing a host with Avahi.** Both programs can listen on port 5353 and both receive multicast. A unicast packet sent to the host on that port reaches only one of them.
+
+## Web interface security
+
+Rule changes affect your network, so the web interface is restricted by default:
+
+- It binds to loopback unless you choose another address, and on loopback it rejects requests with any other `Host` header. This blocks DNS rebinding attacks.
+- A non-loopback address requires `--auth-token`, or an explicit `--insecure-no-auth`.
+- Changes must be JSON and same-origin.
+
+The token and session cookie travel unencrypted over plain HTTP. To reach the interface across an untrusted network, put it behind an HTTPS reverse proxy.
+
+## Rules file
+
+A missing file means no rules. A file that can't be read or validated stops startup with an error and is left untouched, rather than starting with different rules from those you expect.
+
+## Development
+
+Unit tests can run on any OS:
+
+```sh
+pip install ".[dev]"
+pytest tests/unit
+```
+
+Integration tests use real packets across network namespaces, so they need a privileged Linux container:
+
+```sh
+docker build -t mdns-relay-test .
+docker run --rm --privileged mdns-relay-test python -m pytest tests/integration -v
+docker run --rm --privileged mdns-relay-test sh tests/integration/avahi_check.sh
+```
+
+`tests/integration/demo.sh` runs the app with simulated networks and services for trying out the web interface:
+
+```sh
+docker run --rm --privileged -p 8080:8080 mdns-relay-test sh tests/integration/demo.sh
+```
