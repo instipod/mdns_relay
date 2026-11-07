@@ -28,6 +28,19 @@ Then open <http://127.0.0.1:8080/>.
 
 Root isn't required. A systemd unit is in `deploy/mdns-relay.service`.
 
+On Alpine, install the OpenRC service instead:
+
+```sh
+addgroup -S mdns-relay
+adduser -S -D -H -h /var/lib/mdns-relay -s /sbin/nologin -G mdns-relay mdns-relay
+install -m 0755 deploy/mdns-relay.openrc /etc/init.d/mdns-relay
+install -m 0600 deploy/mdns-relay.confd /etc/conf.d/mdns-relay
+rc-update add mdns-relay default
+rc-service mdns-relay start
+```
+
+Logs go to syslog. Set options and the auth token in `/etc/conf.d/mdns-relay`.
+
 To run it in Docker, use `--network host`, or the relay will only see the container's own interface.
 
 ## How rules work

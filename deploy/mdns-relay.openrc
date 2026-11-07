@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+
+description="Rule-based mDNS relay"
+
+: "${MDNS_RELAY_BIN:=/usr/bin/mdns-relay}"
+: "${MDNS_RELAY_RULES_FILE:=/var/lib/mdns-relay/rules.json}"
+
+supervisor=supervise-daemon
+command="$MDNS_RELAY_BIN"
+command_args="--rules-file $MDNS_RELAY_RULES_FILE $MDNS_RELAY_OPTS"
+command_user="mdns-relay:mdns-relay"
+no_new_privs="yes"
+respawn_delay=3
+respawn_max=5
+respawn_period=60
+error_logger="logger -t $RC_SVCNAME -p daemon.info"
+
+depend() {
+	need net
+	use logger
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --owner "$command_user" --mode 0750 \
+		"$(dirname "$MDNS_RELAY_RULES_FILE")"
+}

@@ -1,0 +1,11 @@
+# Path to the mdns-relay executable, e.g. if it's installed in a virtualenv.
+#MDNS_RELAY_BIN="/usr/bin/mdns-relay"
+
+# Where rules and interface settings are stored.
+#MDNS_RELAY_RULES_FILE="/var/lib/mdns-relay/rules.json"
+
+# Extra command-line options.
+#MDNS_RELAY_OPTS="--http-host 0.0.0.0 --interface eth0 --interface eth1"
+
+# Required if --http-host is not a loopback address. Keep this file mode 0600.
+#export MDNS_RELAY_AUTH_TOKEN=""
