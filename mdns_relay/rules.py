@@ -17,12 +17,21 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 
 ANY_TYPE = "*"
+PROTOCOL_MDNS = "mdns"
+PROTOCOL_SSDP = "ssdp"
+_PROTOCOLS = (PROTOCOL_MDNS, PROTOCOL_SSDP)
 
 _SERVICE_TYPE_RE = re.compile(r"^_[a-z0-9][a-z0-9-]{0,62}\._(tcp|udp)$")
+_SSDP_TARGET_RE = re.compile(
+    r"^(upnp:rootdevice|uuid:[^\s]{1,128}|urn:[a-z0-9.-]{1,128}:(device|service):[a-z0-9_.-]{1,64}:[0-9]{1,9})$"
+)
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,15}$")
 _MAX_PATTERN = 255
 _MAX_NOTE = 200
-_FIELDS = {"enabled", "service_type", "instance_pattern", "provider_iface", "client_iface", "note"}
+_FIELDS = {
+    "enabled", "service_type", "instance_pattern", "provider_iface", "client_iface", "note",
+    "protocol",
+}
 
 
 class RuleError(ValueError):
@@ -42,6 +51,7 @@ class Rule:
     provider_iface: str
     client_iface: str
     note: str = ""
+    protocol: str = PROTOCOL_MDNS
 
     def matches_type(self, service_type: str) -> bool:
         return self.service_type == ANY_TYPE or self.service_type == service_type.lower()
@@ -55,12 +65,23 @@ class Rule:
         return asdict(self)
 
 
-def normalize_service_type(value: object) -> str:
+def normalize_ssdp_target(text: str) -> str:
+    if not _SSDP_TARGET_RE.match(text):
+        raise RuleError(
+            "an SSDP service_type must be upnp:rootdevice, uuid:<id>, "
+            "urn:<domain>:device:<type>:<version>, urn:<domain>:service:<type>:<version>, or *"
+        )
+    return text
+
+
+def normalize_service_type(value: object, protocol: str = PROTOCOL_MDNS) -> str:
     if not isinstance(value, str):
         raise RuleError("service_type must be a string")
     text = value.strip().lower().rstrip(".")
     if text == ANY_TYPE:
         return text
+    if protocol == PROTOCOL_SSDP:
+        return normalize_ssdp_target(text)
     if text.endswith(".local"):
         text = text[: -len(".local")]
     if not _SERVICE_TYPE_RE.match(text):
@@ -79,6 +100,10 @@ def build_rule(data: dict, rule_id: str | None = None) -> Rule:
     unknown = set(data) - _FIELDS
     if unknown:
         raise RuleError(f"unknown fields: {', '.join(sorted(unknown))}")
+
+    protocol = data.get("protocol", PROTOCOL_MDNS)
+    if protocol not in _PROTOCOLS:
+        raise RuleError(f"protocol must be one of: {', '.join(_PROTOCOLS)}")
 
     enabled = data.get("enabled", True)
     if not isinstance(enabled, bool):
@@ -108,17 +133,19 @@ def build_rule(data: dict, rule_id: str | None = None) -> Rule:
     return Rule(
         id=rule_id or uuid.uuid4().hex,
         enabled=enabled,
-        service_type=normalize_service_type(data["service_type"]),
+        service_type=normalize_service_type(data["service_type"], protocol),
         instance_pattern=pattern,
         provider_iface=provider,
         client_iface=client,
         note=note,
+        protocol=protocol,
     )
 
 
 def _same_match(a: Rule, b: Rule) -> bool:
     return (
         a.id != b.id
+        and a.protocol == b.protocol
         and a.service_type == b.service_type
         and a.instance_pattern.lower() == b.instance_pattern.lower()
         and a.provider_iface == b.provider_iface

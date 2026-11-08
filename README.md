@@ -1,6 +1,6 @@
 # mDNS Relay
 
-Relays mDNS between Linux network interfaces, but only where you've created a rule. It includes a web interface for seeing the services on each network and managing those rules.
+Relays mDNS and SSDP between Linux network interfaces, but only where you've created a rule. It includes a web interface for seeing the services on each network and managing those rules.
 
 With no rules, nothing is relayed.
 
@@ -24,6 +24,7 @@ Then open <http://127.0.0.1:8080/>.
 | `--auth-token TOKEN` | None | Web interface token of 16 or more characters. Can also be set with `MDNS_RELAY_AUTH_TOKEN` |
 | `--insecure-no-auth` | Off | Allow a non-loopback web interface with no authentication |
 | `--no-browse` | Off | Don't send discovery queries; only listen |
+| `--no-ssdp` | Off | Handle only mDNS, and don't open the SSDP port |
 | `--log-level LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
 
 Root isn't required. A systemd unit is in `deploy/mdns-relay.service`.
@@ -69,15 +70,41 @@ Rule changes apply to the next packet, with no restart.
 
 When a query asks for a unicast reply, the relayed copy asks for a multicast reply instead, so the reply also passes through the rules.
 
+## SSDP
+
+SSDP rules work the same way, for UPnP and DLNA devices. Set `protocol` to `ssdp`. The service type is a search target, and the instance is a pattern matched against the device's USN:
+
+```
+Protocol:     ssdp
+Service type: urn:schemas-upnp-org:device:MediaServer:1
+Instance:     *
+Provider:     eth0
+Client:       eth1
+```
+
+Announcements (`NOTIFY`) go from the provider to the client network if a rule matches their NT and USN. Searches (`M-SEARCH`) go from the client to the provider network if a rule matches their search target; a search for `ssdp:all` needs any SSDP rule for that pair of interfaces. The relay sends each search from a short-lived socket of its own, checks each unicast reply against the rules, and forwards permitted replies to the client that searched.
+
+A device advertises itself under several types, each with its own message. A rule for one device type doesn't pass the same device's `upnp:rootdevice` or `uuid:` messages, so use `*` if a client looks for those.
+
+Also never relayed over SSDP:
+
+- A message whose `LOCATION`, `AL` or `SECURELOCATION.UPNP.ORG` URL isn't an IP address, is link-local, or names a different host from the packet's source address. IPv6 devices that send from a link-local address are therefore not relayed
+- Malformed messages, and messages not sent to the SSDP multicast group
+- Replies arriving on a different interface from the one the search went out on
+
 ## What it sends without a rule
 
-The app sends its own discovery queries on active interfaces, so the Services list fills in without waiting for devices to announce themselves. They start frequently and settle at one round per minute. These queries stay on the interface they're sent on and are never relayed. Use `--no-browse` to turn them off.
+The app sends its own discovery queries on active interfaces, so the Services list fills in without waiting for devices to announce themselves. They start frequently and settle at one round per minute. It does the same with an SSDP `ssdp:all` search. These queries stay on the interface they're sent on and are never relayed. Use `--no-browse` to turn them off.
 
 ## Limitations
 
 - **Discovery only.** The relay makes a service discoverable but doesn't carry its traffic. Clients still need a route and firewall access to the service's IP address and port.
 - **No relaying to programs on the same host.** Relayed packets are sent with multicast loopback off, so Avahi running on the relay host won't see them.
 - **Legacy unicast clients aren't supported.** Their queries come from a port other than 5353, and replies couldn't get back through the relay.
+- **SSDP event callbacks aren't carried.** Clients need a route to the device's `LOCATION` address and port, and UPnP eventing also needs the device to be able to reach the client.
+- **Firewalls and SSDP.** A firewall on the relay host must allow replies to the relay's search sockets, which use ephemeral ports.
+- **Sharing a host with a UPnP daemon.** Both programs can listen on port 1900 and both receive multicast. A unicast packet sent to the host on that port reaches only one of them.
+- **Downgrading.** Rules files written by this version contain `protocol`, which older versions reject.
 - **Sharing a host with Avahi.** Both programs can listen on port 5353 and both receive multicast. A unicast packet sent to the host on that port reaches only one of them.
 
 ## Web interface security

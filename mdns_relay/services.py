@@ -1,4 +1,4 @@
-"""Table of services and hosts learned from mDNS responses, per interface.
+"""Tables of what has been learned from mDNS and SSDP traffic, per interface.
 
 Every entry comes from untrusted network traffic, so all sizes are capped. Once
 a cap is reached new entries are refused until existing ones expire.
@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import socket
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 from .dns import (
     TYPE_A,
@@ -24,6 +25,8 @@ from .dns import (
     name_text,
     parse_service_name,
 )
+from .rules import PROTOCOL_MDNS, PROTOCOL_SSDP
+from .ssdp import KIND_SEARCH, SsdpMessage
 
 MAX_SERVICES = 4096
 MAX_HOSTS = 4096
@@ -31,6 +34,8 @@ MAX_TYPES = 1024
 MAX_ADDRESSES_PER_HOST = 16
 MAX_TXT_ITEMS = 64
 MAX_TXT_CHARS = 2048
+MAX_DEVICES = 4096
+MAX_DEVICE_TEXT = 512
 
 
 def parse_txt(rdata: bytes) -> list[str]:
@@ -277,6 +282,7 @@ class ServiceTable:
                 addresses = sorted(self._hosts.get((entry.iface, name_key(entry.host)), ()))
             results.append(
                 {
+                    "protocol": PROTOCOL_MDNS,
                     "iface": entry.iface,
                     "service_type": entry.service_type,
                     "instance": entry.instance,
@@ -285,6 +291,98 @@ class ServiceTable:
                     "port": entry.port,
                     "addresses": addresses,
                     "txt": entry.txt,
+                    "families": sorted(entry.families),
+                    "first_seen": entry.first_seen,
+                    "last_seen": entry.last_seen,
+                    "expires_in": max(0, round(entry.expires - now)),
+                }
+            )
+        results.sort(key=lambda s: (s["service_type"], s["instance"].lower(), s["iface"]))
+        return results
+
+
+@dataclass(slots=True)
+class DeviceEntry:
+    iface: str
+    target: str
+    usn: str
+    address: str
+    location: str
+    server: str
+    first_seen: float
+    last_seen: float
+    expires: float
+    families: set[str] = field(default_factory=set)
+
+
+class DeviceTable:
+    """SSDP devices, one entry per USN advertised on an interface."""
+
+    def __init__(self, max_devices: int = MAX_DEVICES) -> None:
+        self.max_devices = max_devices
+        self.version = 0
+        self.refused = 0
+        self._devices: dict[tuple[str, str], DeviceEntry] = {}
+
+    def update(
+        self, iface: str, message: SsdpMessage, family: str, address: str, now: float
+    ) -> None:
+        """Learn from an announcement or a reply. Searches prove nothing."""
+        if message.kind == KIND_SEARCH:
+            return
+        key = (iface, message.usn)
+        if message.is_byebye:
+            if self._devices.pop(key, None) is not None:
+                self.version += 1
+            return
+        entry = self._devices.get(key)
+        if entry is None:
+            if len(self._devices) >= self.max_devices:
+                self.refused += 1
+                return
+            entry = DeviceEntry(
+                iface, message.target[:MAX_DEVICE_TEXT], message.usn[:MAX_DEVICE_TEXT],
+                address, "", "", now, now, now,
+            )
+            self._devices[key] = entry
+            self.version += 1
+        location = message.location[:MAX_DEVICE_TEXT]
+        server = message.server[:MAX_DEVICE_TEXT]
+        if (entry.address, entry.location, entry.server) != (address, location, server):
+            entry.address, entry.location, entry.server = address, location, server
+            self.version += 1
+        if family not in entry.families:
+            entry.families.add(family)
+            self.version += 1
+        entry.last_seen = now
+        entry.expires = now + message.max_age
+
+    def prune(self, now: float) -> None:
+        for key, entry in list(self._devices.items()):
+            if entry.expires <= now:
+                del self._devices[key]
+                self.version += 1
+
+    def forget_interface(self, iface: str) -> None:
+        for key in [k for k in self._devices if k[0] == iface]:
+            del self._devices[key]
+            self.version += 1
+
+    def snapshot(self, now: float) -> list[dict]:
+        results = []
+        for entry in self._devices.values():
+            parts = urlsplit(entry.location)
+            results.append(
+                {
+                    "protocol": PROTOCOL_SSDP,
+                    "iface": entry.iface,
+                    "service_type": entry.target,
+                    "instance": entry.usn,
+                    "name": entry.usn,
+                    "host": parts.hostname,
+                    "port": parts.port,
+                    "addresses": [entry.address],
+                    "txt": [item for item in (entry.location, entry.server) if item],
                     "families": sorted(entry.families),
                     "first_seen": entry.first_seen,
                     "last_seen": entry.last_seen,

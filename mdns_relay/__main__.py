@@ -16,7 +16,8 @@ from aiohttp import web
 from . import __version__
 from .relay import Relay
 from .rules import RuleFileError, RuleStore
-from .transport import FAMILY_NAMES, MulticastTransport
+from .ssdp_relay import SsdpRelay
+from .transport import FAMILY_NAMES, SSDP, MulticastTransport, SearchSocket
 from .web import LOOPBACK_HOSTS, WebApi
 
 log = logging.getLogger("mdns_relay")
@@ -27,7 +28,7 @@ MIN_TOKEN_LENGTH = 16
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="mdns-relay",
-        description="Relay mDNS between interfaces, only where a rule allows it.",
+        description="Relay mDNS and SSDP between interfaces, only where a rule allows it.",
     )
     parser.add_argument("--rules-file", default="mdns-relay.json", help="where rules are stored")
     parser.add_argument(
@@ -53,6 +54,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-browse",
         action="store_true",
         help="don't send this app's own discovery queries; only listen",
+    )
+    parser.add_argument(
+        "--no-ssdp",
+        action="store_true",
+        help="handle only mDNS, not SSDP",
     )
     parser.add_argument(
         "--log-level",
@@ -106,9 +112,36 @@ async def run(args: argparse.Namespace, store: RuleStore) -> int:
         log.error("could not open an mDNS socket for any IP family")
         return 1
 
+    if not args.no_ssdp:
+        def open_search(family, ifindex, on_packet):
+            search = SearchSocket(family, ifindex, SSDP, on_packet)
+            search.start(loop)
+            return search
+
+        ssdp = SsdpRelay(relay, open_search)
+        ssdp_opened = False
+        for family in (socket.AF_INET, socket.AF_INET6):
+            try:
+                transport = MulticastTransport(family, ssdp.handle_packet, SSDP)
+            except OSError as exc:
+                log.warning("SSDP on %s disabled: %s", FAMILY_NAMES[family], exc)
+                continue
+            transport.start(loop)
+            relay.add_ssdp_transport(family, transport)
+            transports.append(transport)
+            ssdp_opened = True
+        if ssdp_opened:
+            relay.ssdp = ssdp
+
     relay.sync_interfaces()
     log.info("active interfaces: %s", ", ".join(relay.active_names()) or "(none)")
     log.info("%d rule(s) loaded from %s", len(store.rules), store.path)
+
+    def close_all() -> None:
+        if relay.ssdp:
+            relay.ssdp.close()
+        for transport in transports:
+            transport.close()
 
     allowed_hosts = LOOPBACK_HOSTS if _is_loopback(args.http_host) else None
     api = WebApi(relay, store, auth_token=args.auth_token, allowed_hosts=allowed_hosts)
@@ -120,8 +153,7 @@ async def run(args: argparse.Namespace, store: RuleStore) -> int:
     except OSError as exc:
         log.error("cannot start web interface on %s:%d: %s", args.http_host, args.http_port, exc)
         await runner.cleanup()
-        for transport in transports:
-            transport.close()
+        close_all()
         return 1
     log.info("web interface: http://%s:%d/", args.http_host, args.http_port)
 
@@ -140,8 +172,7 @@ async def run(args: argparse.Namespace, store: RuleStore) -> int:
     stop_task.cancel()
     await asyncio.gather(relay_task, stop_task, return_exceptions=True)
     await runner.cleanup()
-    for transport in transports:
-        transport.close()
+    close_all()
     log.info("stopped")
     return exit_code
 

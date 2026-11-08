@@ -150,3 +150,56 @@ def test_save_leaves_no_temp_files(tmp_path):
     store = RuleStore(tmp_path / "rules.json")
     store.add(VALID)
     assert [p.name for p in tmp_path.iterdir()] == ["rules.json"]
+
+
+def test_rule_without_protocol_is_mdns():
+    assert build_rule(
+        {"service_type": "_http._tcp", "provider_iface": "a", "client_iface": "b"}
+    ).protocol == "mdns"
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["*", "upnp:rootdevice", "uuid:abc-123", "urn:schemas-upnp-org:device:MediaServer:1"],
+)
+def test_ssdp_targets_accepted(target):
+    built = build_rule(
+        {"protocol": "ssdp", "service_type": target, "provider_iface": "a", "client_iface": "b"}
+    )
+    assert built.protocol == "ssdp"
+    assert built.service_type == target.lower()
+
+
+@pytest.mark.parametrize("target", ["ssdp:all", "_http._tcp", "urn:x:thing:y:1", ""])
+def test_ssdp_invalid_targets_rejected(target):
+    with pytest.raises(RuleError):
+        build_rule(
+            {"protocol": "ssdp", "service_type": target, "provider_iface": "a", "client_iface": "b"}
+        )
+
+
+def test_unknown_protocol_rejected():
+    with pytest.raises(RuleError):
+        build_rule(
+            {"protocol": "bonjour", "service_type": "*", "provider_iface": "a", "client_iface": "b"}
+        )
+
+
+def test_same_match_differs_by_protocol(tmp_path):
+    store = RuleStore(tmp_path / "rules.json")
+    base = {"service_type": "*", "provider_iface": "a", "client_iface": "b"}
+    store.add(base)
+    store.add({**base, "protocol": "ssdp"})
+    with pytest.raises(RuleError):
+        store.add({**base, "protocol": "ssdp"})
+
+
+def test_file_without_protocol_loads_as_mdns(tmp_path):
+    path = tmp_path / "rules.json"
+    path.write_text(json.dumps({"version": 1, "rules": [{
+        "id": "r1", "enabled": True, "service_type": "_http._tcp", "instance_pattern": "*",
+        "provider_iface": "a", "client_iface": "b", "note": "",
+    }]}))
+    store = RuleStore(path)
+    store.load()
+    assert store.rules[0].protocol == "mdns"

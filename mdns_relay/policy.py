@@ -31,7 +31,8 @@ from .dns import (
     name_key,
     parse_service_name,
 )
-from .rules import Rule
+from .rules import PROTOCOL_MDNS, PROTOCOL_SSDP, Rule
+from .ssdp import KIND_SEARCH, TARGET_ALL, SsdpMessage
 
 REASON_NO_RULE = "no_rule"
 REASON_PROBE = "probe"
@@ -49,7 +50,7 @@ class HostIndex(Protocol):
 
 @dataclass(slots=True)
 class Decision:
-    message: Message | None
+    message: Message | SsdpMessage | None
     reason: str | None = None
     dropped: Counter = field(default_factory=Counter)
     rule_ids: set[str] = field(default_factory=set)
@@ -243,10 +244,50 @@ def filter_packet(
     applicable = [
         rule
         for rule in rules
-        if rule.enabled and rule.provider_iface == provider and rule.client_iface == client
+        if rule.enabled
+        and rule.protocol == PROTOCOL_MDNS
+        and rule.provider_iface == provider
+        and rule.client_iface == client
     ]
     if not applicable:
         return Decision(None, reason=REASON_NO_RULE)
     if message.is_response:
         return _filter_response(message, applicable, provider, hosts)
     return _filter_query(message, applicable, provider, hosts)
+
+
+def ssdp_rules(rules: Sequence[Rule], provider: str, client: str) -> list[Rule]:
+    return [
+        rule
+        for rule in rules
+        if rule.enabled
+        and rule.protocol == PROTOCOL_SSDP
+        and rule.provider_iface == provider
+        and rule.client_iface == client
+    ]
+
+
+def _permitted_ssdp_rule(message: SsdpMessage, applicable: Sequence[Rule]) -> Rule | None:
+    if message.kind == KIND_SEARCH:
+        # A search names no device yet, so replies are checked against the USN.
+        if message.target == TARGET_ALL:
+            return applicable[0]
+        return next((r for r in applicable if r.matches_type(message.target)), None)
+    return next((r for r in applicable if r.matches_instance(message.target, message.usn)), None)
+
+
+def filter_ssdp(
+    message: SsdpMessage, source: str, destination: str, rules: Sequence[Rule]
+) -> Decision:
+    """Decide whether an SSDP message may go from source to destination."""
+    if message.kind == KIND_SEARCH:
+        client, provider = source, destination
+    else:
+        provider, client = source, destination
+    applicable = ssdp_rules(rules, provider, client)
+    if not applicable:
+        return Decision(None, reason=REASON_NO_RULE)
+    rule = _permitted_ssdp_rule(message, applicable)
+    if rule is None:
+        return Decision(None, reason=REASON_NOTHING_PERMITTED)
+    return Decision(message, rule_ids={rule.id})

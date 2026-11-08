@@ -214,3 +214,15 @@ class TestStartupChecks(IsolatedAsyncioTestCase):
         self.assertIsNone(self.check("0.0.0.0", insecure=True))
         self.assertIsNone(self.check("0.0.0.0", token=TOKEN))
         self.assertIsNotNone(self.check("0.0.0.0", token="short"))
+
+
+class TestSsdpApi(WebCase):
+    async def test_ssdp_rule_round_trip(self):
+        body = {**RULE, "protocol": "ssdp", "service_type": "upnp:rootdevice"}
+        response = await self.client.post("/api/rules", json=body)
+        self.assertEqual(response.status, 201)
+        self.assertEqual((await response.json())["protocol"], "ssdp")
+
+    async def test_invalid_ssdp_target_rejected(self):
+        response = await self.client.post("/api/rules", json={**RULE, "protocol": "ssdp"})
+        self.assertEqual(response.status, 400)

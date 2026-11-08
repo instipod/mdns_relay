@@ -144,14 +144,15 @@ class WebApi:
                 "interfaces_pinned": relay.pinned is not None,
                 "active_interfaces": relay.active_names(),
                 "rule_count": len(self.store.rules),
-                "service_count": len(relay.table.snapshot(relay.clock())),
+                "ssdp": relay.ssdp is not None,
+                "service_count": len(relay.service_snapshot()),
                 "counters": dict(relay.counters),
             }
         )
 
     async def services(self, request: web.Request) -> web.Response:
         relay = self.relay
-        items = relay.table.snapshot(relay.clock())
+        items = relay.service_snapshot()
         for item in items:
             item["relayed_to"] = relay.relay_targets(item)
         return web.json_response({"services": items})

@@ -30,6 +30,8 @@ const state = {
   editingRuleId: null,
 };
 
+const PROTOCOL_LABELS = { mdns: "mDNS", ssdp: "SSDP" };
+
 const DROP_REASONS = {
   no_rule: "No rule for this path",
   nothing_permitted: "Rule exists, but nothing in the packet matched",
@@ -37,6 +39,9 @@ const DROP_REASONS = {
   unicast: "Not sent to the multicast group",
   malformed: "Malformed packet",
   legacy_source_port: "Source port isn't 5353",
+  bad_location: "Device URL isn't the sender's own address",
+  search_limit: "Too many searches in progress",
+  wrong_interface: "Reply arrived on the wrong interface",
   send_failed: "Couldn't send",
   internal_error: "Internal error",
 };
@@ -93,7 +98,7 @@ function renderServices() {
   const query = $("service-search").value.trim().toLowerCase();
   const matches = state.services.filter((service) => {
     if (!query) return true;
-    return [service.instance, service.service_type, service.iface, service.host, ...service.addresses]
+    return [service.instance, service.service_type, service.protocol, service.iface, service.host, ...service.addresses]
       .some((value) => value && value.toLowerCase().includes(query));
   });
 
@@ -103,6 +108,7 @@ function renderServices() {
       : [el("span", { class: "badge" }, "Not relayed")];
     return el("tr", {},
       el("td", { class: "instance" }, service.instance),
+      el("td", {}, el("span", { class: "badge" }, PROTOCOL_LABELS[service.protocol])),
       el("td", { class: "mono" }, service.service_type),
       el("td", {}, el("span", { class: "badge" }, service.iface)),
       el("td", {},
@@ -120,6 +126,7 @@ function renderServices() {
             type: "button",
             "data-focus": `create-${service.iface}-${service.name}`,
             on: { click: () => openRuleDialog({
+              protocol: service.protocol,
               service_type: service.service_type,
               instance_pattern: "*",
               provider_iface: service.iface,
@@ -158,6 +165,7 @@ function renderRules() {
         "aria-label": `Enable rule for ${rule.service_type}`,
         on: { change: (event) => setRuleEnabled(rule, event.target) },
       })),
+    el("td", {}, el("span", { class: "badge" }, PROTOCOL_LABELS[rule.protocol])),
     el("td", { class: "mono" }, rule.service_type === "*" ? "* (every service type)" : rule.service_type),
     el("td", { class: "mono" }, rule.instance_pattern),
     el("td", {},
@@ -205,10 +213,24 @@ function fillInterfaceSelect(select, selected) {
   select.value = selected || "";
 }
 
+function updateRuleHints() {
+  const form = $("rule-form");
+  const ssdp = form.elements.protocol.value === "ssdp";
+  form.elements.service_type.placeholder = ssdp ? "urn:schemas-upnp-org:device:MediaServer:1" : "_airplay._tcp";
+  $("rule-type-hint").textContent = ssdp
+    ? "A search target such as upnp:rootdevice or a urn:, or * for everything."
+    : "Use the exact type, or * for every service type.";
+  $("rule-instance-hint").textContent = ssdp
+    ? "A USN or pattern, such as uuid:1234* . Use * for all devices."
+    : "A name or pattern, such as Living* . Use * for all instances.";
+}
+
 function openRuleDialog(values = {}, ruleId = null) {
   state.editingRuleId = ruleId;
   const form = $("rule-form");
   $("rule-dialog-title").textContent = ruleId ? "Edit rule" : "Add rule";
+  form.elements.protocol.value = values.protocol || "mdns";
+  updateRuleHints();
   form.elements.service_type.value = values.service_type || "";
   form.elements.instance_pattern.value = values.instance_pattern || "*";
   form.elements.note.value = values.note || "";
@@ -222,6 +244,7 @@ async function submitRule(event) {
   event.preventDefault();
   const form = event.target;
   const body = {
+    protocol: form.elements.protocol.value,
     service_type: form.elements.service_type.value.trim(),
     instance_pattern: form.elements.instance_pattern.value.trim(),
     provider_iface: form.elements.provider_iface.value,
@@ -311,7 +334,7 @@ function renderActivity() {
       el("td", { class: "nowrap" },
         item.source, item.destination ? ` to ${item.destination}` : "",
         el("span", { class: "stack muted" }, `${item.family}, from ${item.source_address}`)),
-      el("td", {}, item.kind ?? "Unknown"),
+      el("td", {}, `${PROTOCOL_LABELS[item.protocol]} ${item.kind ?? "unknown"}`),
       el("td", { class: "mono" }, item.summary),
     );
   }));
@@ -483,6 +506,7 @@ $("service-search").addEventListener("input", renderServices);
 $("activity-filter").addEventListener("change", renderActivity);
 $("add-rule").addEventListener("click", () => openRuleDialog());
 $("rule-form").addEventListener("submit", submitRule);
+$("rule-protocol").addEventListener("change", updateRuleHints);
 $("rule-cancel").addEventListener("click", () => $("rule-dialog").close());
 $("login-form").addEventListener("submit", submitLogin);
 $("login-dialog").addEventListener("cancel", (event) => event.preventDefault());

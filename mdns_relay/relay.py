@@ -27,8 +27,10 @@ from .dns import (
     parse_message,
 )
 from .interfaces import InterfaceInfo, list_interfaces
-from .rules import RuleStore
+from .rules import PROTOCOL_MDNS, RuleStore
 from .services import ServiceTable
+from .ssdp import SsdpMessage
+from .ssdp_relay import SsdpRelay
 from .transport import FAMILY_NAMES, GROUPS, MDNS_PORT, ReceivedPacket
 
 log = logging.getLogger(__name__)
@@ -109,6 +111,8 @@ class Relay:
         self.clock = clock
         self.started = clock()
         self.transports: dict[int, Transport] = {}
+        self.ssdp_transports: dict[int, Transport] = {}
+        self.ssdp: SsdpRelay | None = None
         self.interfaces: dict[str, InterfaceInfo] = {}
         self.counters: Counter = Counter()
         self.interface_counters: dict[str, Counter] = {}
@@ -118,15 +122,24 @@ class Relay:
         self._active: dict[str, InterfaceInfo] = {}
         self._by_index: dict[int, InterfaceInfo] = {}
         self._joined: set[tuple[int, int]] = set()
+        self.ssdp_joined: set[tuple[int, int]] = set()
         self._sent = RecentPackets(ECHO_WINDOW, clock)
         self._browse_wake = asyncio.Event()
 
     @property
     def state_version(self) -> tuple:
-        return (self.table.version, self.store.version, self._activity_version)
+        ssdp_version = self.ssdp.table.version if self.ssdp else 0
+        return (self.table.version, self.store.version, self._activity_version, ssdp_version)
 
     def add_transport(self, family: int, transport: Transport) -> None:
         self.transports[family] = transport
+
+    def add_ssdp_transport(self, family: int, transport: Transport) -> None:
+        self.ssdp_transports[family] = transport
+
+    @staticmethod
+    def digest(data: bytes) -> bytes:
+        return _digest(data)
 
     def is_enabled(self, info: InterfaceInfo) -> bool:
         if not info.up or info.loopback or not info.multicast:
@@ -138,39 +151,54 @@ class Relay:
     def active_names(self) -> list[str]:
         return sorted(self._active)
 
-    def sync_interfaces(self) -> None:
-        """Match multicast memberships to the current interfaces and settings."""
-        infos = {info.name: info for info in self._list_interfaces()}
-        active = {name: info for name, info in infos.items() if self.is_enabled(info)}
+    def _sync_memberships(
+        self,
+        active: dict[str, InterfaceInfo],
+        transports: dict[int, Transport],
+        joined: set[tuple[int, int]],
+    ) -> bool:
         wanted = {
             (family, info.index)
             for info in active.values()
-            for family in self.transports
+            for family in transports
             if info.has_family(family)
         }
-        for family, index in self._joined - wanted:
-            self.transports[family].leave(index)
-            self._joined.discard((family, index))
+        for family, index in joined - wanted:
+            transports[family].leave(index)
+            joined.discard((family, index))
         joined_new = False
-        for family, index in wanted - self._joined:
+        for family, index in wanted - joined:
             try:
-                self.transports[family].join(index)
+                transports[family].join(index)
             except OSError as exc:
                 log.warning(
                     "cannot join %s multicast on interface %d: %s",
                     FAMILY_NAMES[family], index, exc,
                 )
                 continue
-            self._joined.add((family, index))
+            joined.add((family, index))
+            joined_new = True
+        return joined_new
+
+    def sync_interfaces(self) -> None:
+        """Match multicast memberships to the current interfaces and settings."""
+        infos = {info.name: info for info in self._list_interfaces()}
+        active = {name: info for name, info in infos.items() if self.is_enabled(info)}
+        joined_new = self._sync_memberships(active, self.transports, self._joined)
+        if self._sync_memberships(active, self.ssdp_transports, self.ssdp_joined):
             joined_new = True
 
         for name in self._active.keys() - active.keys():
             self.table.forget_interface(name)
+            if self.ssdp:
+                self.ssdp.table.forget_interface(name)
         self.interfaces = infos
         self._active = active
         self._by_index = {info.index: info for info in active.values()}
         for name in active:
             self.interface_counters.setdefault(name, Counter())
+        if self.ssdp:
+            self.ssdp.sync_interfaces()
         if joined_new:
             self._browse_wake.set()
 
@@ -178,19 +206,24 @@ class Relay:
         self,
         packet: ReceivedPacket,
         source: str,
-        message: Message | None,
+        message: Message | SsdpMessage | None,
         action: str,
         reason: str | None,
         destination: str | None = None,
+        protocol: str = PROTOCOL_MDNS,
     ) -> None:
         kind = None
         summary = ""
-        if message is not None:
+        if isinstance(message, SsdpMessage):
+            kind = message.kind
+            summary = message.summary
+        elif message is not None:
             kind = "response" if message.is_response else "query"
             summary = _summarize(message)
         self.activity.append(
             {
                 "time": self.clock(),
+                "protocol": protocol,
                 "family": FAMILY_NAMES[packet.family],
                 "source": source,
                 "source_address": packet.source,
@@ -208,12 +241,15 @@ class Relay:
         packet: ReceivedPacket,
         iface: str,
         reason: str,
-        message: Message | None = None,
+        message: Message | SsdpMessage | None = None,
         destination: str | None = None,
+        protocol: str = PROTOCOL_MDNS,
     ) -> None:
         self.counters[f"drop_{reason}"] += 1
         self.interface_counters[iface]["dropped"] += 1
-        self._record_activity(packet, iface, message, ACTION_DROPPED, reason, destination)
+        self._record_activity(
+            packet, iface, message, ACTION_DROPPED, reason, destination, protocol
+        )
 
     def handle_packet(self, packet: ReceivedPacket) -> None:
         """Process one received packet. Failure always results in no relay."""
@@ -279,11 +315,13 @@ class Relay:
         else:
             self._drop(packet, source, "send_failed", message, destination)
 
-    def _transmit(self, family: int, iface: str, data: bytes) -> bool:
+    def _transmit(
+        self, family: int, iface: str, data: bytes, transports: dict[int, Transport] | None = None
+    ) -> bool:
         info = self._active[iface]
         self._sent.add((family, iface, _digest(data)))
         try:
-            self.transports[family].send(info.index, data)
+            (self.transports if transports is None else transports)[family].send(info.index, data)
         except OSError as exc:
             log.warning("send failed on %s (%s): %s", iface, FAMILY_NAMES[family], exc)
             self.counters["send_errors"] += 1
@@ -317,6 +355,8 @@ class Relay:
                 for message in messages:
                     if self._transmit(family, name, encode_message(message)):
                         self.counters["browse_queries_sent"] += 1
+        if self.ssdp:
+            self.ssdp.browse_once()
 
     async def _rescan_loop(self) -> None:
         while True:
@@ -330,6 +370,8 @@ class Relay:
         while True:
             await asyncio.sleep(PRUNE_INTERVAL)
             self.table.prune(self.clock())
+            if self.ssdp:
+                self.ssdp.table.prune(self.clock())
 
     async def _browse_loop(self) -> None:
         delay = 1.0
@@ -348,6 +390,8 @@ class Relay:
         tasks = [self._rescan_loop(), self._prune_loop()]
         if self.browse:
             tasks.append(self._browse_loop())
+        if self.ssdp:
+            tasks.append(self.ssdp.run())
         await asyncio.gather(*tasks)
 
     def rule_status(self, rule) -> list[str]:
@@ -360,12 +404,19 @@ class Relay:
                 problems.append(f"{label} interface {name} is not active")
         return problems
 
+    def service_snapshot(self) -> list[dict]:
+        items = self.table.snapshot(self.clock())
+        if self.ssdp:
+            items += self.ssdp.table.snapshot(self.clock())
+        return items
+
     def relay_targets(self, service: dict) -> list[str]:
         """Return the client interfaces that an enabled rule exposes a service to."""
         targets = {
             rule.client_iface
             for rule in self.store.rules
             if rule.enabled
+            and rule.protocol == service.get("protocol", PROTOCOL_MDNS)
             and rule.provider_iface == service["iface"]
             and rule.matches_instance(service["service_type"], service["instance"])
         }

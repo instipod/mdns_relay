@@ -16,6 +16,8 @@ from helpers import (
     type_name,
 )
 
+from mdns_relay.policy import filter_ssdp
+from mdns_relay.ssdp import KIND_NOTIFY, KIND_SEARCH, SsdpMessage
 from mdns_relay.dns import (
     META_QUERY_NAME,
     TYPE_A,
@@ -383,3 +385,35 @@ def test_input_message_is_not_modified():
     message = query(Question(type_name(HTTP), TYPE_PTR, unicast=True))
     forward(message, [rule()])
     assert message.questions[0].unicast is True
+
+
+def test_ssdp_rule_never_authorizes_mdns():
+    ssdp_rule = rule(service_type="*", protocol="ssdp")
+    decision = filter_packet(response([ptr("_http._tcp", "A")]), "prov", "cli", [ssdp_rule], NoHosts())
+    assert decision.message is None
+    assert decision.reason == REASON_NO_RULE
+
+
+def test_mdns_rule_never_authorizes_ssdp():
+    notify = SsdpMessage(KIND_NOTIFY, "upnp:rootdevice", usn="uuid:a")
+    decision = filter_ssdp(notify, "prov", "cli", [rule(service_type="*")])
+    assert decision.message is None
+    assert decision.reason == REASON_NO_RULE
+
+
+def test_ssdp_all_search_passes_with_any_rule_and_typed_search_needs_match():
+    typed = rule(service_type="urn:x:device:Tv:1", protocol="ssdp")
+    assert filter_ssdp(SsdpMessage(KIND_SEARCH, "ssdp:all"), "cli", "prov", [typed]).message
+    assert filter_ssdp(SsdpMessage(KIND_SEARCH, "urn:x:device:Tv:1"), "cli", "prov", [typed]).message
+    other = filter_ssdp(SsdpMessage(KIND_SEARCH, "upnp:rootdevice"), "cli", "prov", [typed])
+    assert other.message is None
+    assert other.reason == "nothing_permitted"
+
+
+def test_ssdp_usn_pattern_filters_and_direction_is_one_way():
+    typed = rule(service_type="*", protocol="ssdp", instance_pattern="uuid:good*")
+    good = SsdpMessage(KIND_NOTIFY, "upnp:rootdevice", usn="uuid:good-1")
+    bad = SsdpMessage(KIND_NOTIFY, "upnp:rootdevice", usn="uuid:bad-1")
+    assert filter_ssdp(good, "prov", "cli", [typed]).message
+    assert filter_ssdp(bad, "prov", "cli", [typed]).message is None
+    assert filter_ssdp(good, "cli", "prov", [typed]).reason == REASON_NO_RULE

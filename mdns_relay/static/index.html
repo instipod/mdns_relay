@@ -32,7 +32,7 @@
         <table>
           <thead>
             <tr>
-              <th>Instance</th><th>Type</th><th>Interface</th><th>Host and addresses</th>
+              <th>Instance</th><th>Protocol</th><th>Type</th><th>Interface</th><th>Host and addresses</th>
               <th>Details</th><th>Relayed to</th><th><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
@@ -51,7 +51,7 @@
         <table>
           <thead>
             <tr>
-              <th>On</th><th>Service type</th><th>Instance</th><th>Access</th><th>Note</th>
+              <th>On</th><th>Protocol</th><th>Service type</th><th>Instance</th><th>Access</th><th>Note</th>
               <th><span class="visually-hidden">Actions</span></th>
             </tr>
           </thead>
@@ -105,13 +105,19 @@
   <dialog id="rule-dialog" aria-labelledby="rule-dialog-title">
     <form id="rule-form" method="dialog">
       <h2 id="rule-dialog-title">Add rule</h2>
+      <label>Protocol
+        <select name="protocol" id="rule-protocol">
+          <option value="mdns">mDNS</option>
+          <option value="ssdp">SSDP</option>
+        </select>
+      </label>
       <label>Service type
         <input name="service_type" required placeholder="_airplay._tcp" autocomplete="off">
-        <small>Use the exact type, or * for every service type.</small>
+        <small id="rule-type-hint">Use the exact type, or * for every service type.</small>
       </label>
       <label>Instance
         <input name="instance_pattern" required value="*" autocomplete="off">
-        <small>A name or pattern, such as Living* . Use * for all instances.</small>
+        <small id="rule-instance-hint">A name or pattern, such as Living* . Use * for all instances.</small>
       </label>
       <div class="field-row">
         <label>Provider interface

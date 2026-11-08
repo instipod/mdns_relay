@@ -20,7 +20,7 @@ from mdns_relay.dns import (
     encode_message,
     name_from_text,
 )
-from mdns_relay.transport import MDNS_IPV4_GROUP, MDNS_PORT
+from mdns_relay.transport import MDNS_IPV4_GROUP, MDNS_PORT, SSDP_IPV4_GROUP, SSDP_PORT
 
 SERVICES = {
     "lan": [
@@ -33,6 +33,25 @@ SERVICES = {
         ("Thermostat", "_hap._tcp", "thermostat", 8080, ["md=Demo Thermostat"], "10.10.2.32"),
     ],
 }
+
+SSDP_DEVICES = {
+    "lan": [],
+    "iot": [("10.10.2.2", "urn:schemas-upnp-org:device:MediaRenderer:1", "demo-tv")],
+}
+
+
+def build_ssdp_notify(address: str, target: str, device: str) -> bytes:
+    return (
+        "NOTIFY * HTTP/1.1\r\n"
+        f"HOST: {SSDP_IPV4_GROUP}:{SSDP_PORT}\r\n"
+        "CACHE-CONTROL: max-age=60\r\n"
+        f"LOCATION: http://{address}:8200/description.xml\r\n"
+        f"NT: {target}\r\n"
+        "NTS: ssdp:alive\r\n"
+        "SERVER: Demo/1.0 UPnP/1.1 Demo/1.0\r\n"
+        f"USN: uuid:{device}::{target}\r\n"
+        "\r\n"
+    ).encode()
 
 
 def build_announcement(service) -> Message:
@@ -71,6 +90,8 @@ def main() -> None:
     while True:
         for service in SERVICES[segment]:
             sock.sendto(encode_message(build_announcement(service)), (MDNS_IPV4_GROUP, MDNS_PORT))
+        for device in SSDP_DEVICES[segment]:
+            sock.sendto(build_ssdp_notify(*device), (SSDP_IPV4_GROUP, SSDP_PORT))
         time.sleep(10)
 
 
