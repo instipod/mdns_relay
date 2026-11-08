@@ -160,7 +160,13 @@ def test_rule_without_protocol_is_mdns():
 
 @pytest.mark.parametrize(
     "target",
-    ["*", "upnp:rootdevice", "uuid:abc-123", "urn:schemas-upnp-org:device:MediaServer:1"],
+    [
+        "*",
+        "upnp:rootdevice",
+        "uuid:abc-123",
+        "urn:schemas-upnp-org:device:MediaServer:1",
+        "roku:ecp",
+    ],
 )
 def test_ssdp_targets_accepted(target):
     built = build_rule(
@@ -170,7 +176,7 @@ def test_ssdp_targets_accepted(target):
     assert built.service_type == target.lower()
 
 
-@pytest.mark.parametrize("target", ["ssdp:all", "_http._tcp", "urn:x:thing:y:1", ""])
+@pytest.mark.parametrize("target", ["ssdp:all", "_http._tcp", "bad target:1", "noscheme", ""])
 def test_ssdp_invalid_targets_rejected(target):
     with pytest.raises(RuleError):
         build_rule(
@@ -203,3 +209,8 @@ def test_file_without_protocol_loads_as_mdns(tmp_path):
     store = RuleStore(path)
     store.load()
     assert store.rules[0].protocol == "mdns"
+
+
+def test_ssdp_type_without_protocol_explains_the_fix():
+    with pytest.raises(RuleError, match='protocol "ssdp"'):
+        build_rule({**VALID, "service_type": "urn:x:device:Tv:1"})

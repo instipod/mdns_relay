@@ -23,7 +23,7 @@ _PROTOCOLS = (PROTOCOL_MDNS, PROTOCOL_SSDP)
 
 _SERVICE_TYPE_RE = re.compile(r"^_[a-z0-9][a-z0-9-]{0,62}\._(tcp|udp)$")
 _SSDP_TARGET_RE = re.compile(
-    r"^(upnp:rootdevice|uuid:[^\s]{1,128}|urn:[a-z0-9.-]{1,128}:(device|service):[a-z0-9_.-]{1,64}:[0-9]{1,9})$"
+    r"^[a-z0-9][a-z0-9._-]{0,63}:[^\s]{1,255}$"
 )
 _INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,15}$")
 _MAX_PATTERN = 255
@@ -66,10 +66,12 @@ class Rule:
 
 
 def normalize_ssdp_target(text: str) -> str:
+    if text == "ssdp:all":
+        raise RuleError("use * to match every SSDP service type")
     if not _SSDP_TARGET_RE.match(text):
         raise RuleError(
-            "an SSDP service_type must be upnp:rootdevice, uuid:<id>, "
-            "urn:<domain>:device:<type>:<version>, urn:<domain>:service:<type>:<version>, or *"
+            "an SSDP service_type must be a search target such as upnp:rootdevice, "
+            "roku:ecp or a urn:, or be *"
         )
     return text
 
@@ -85,6 +87,8 @@ def normalize_service_type(value: object, protocol: str = PROTOCOL_MDNS) -> str:
     if text.endswith(".local"):
         text = text[: -len(".local")]
     if not _SERVICE_TYPE_RE.match(text):
+        if text.startswith(("urn:", "uuid:", "upnp:", "ssdp:")):
+            raise RuleError(f'{text} is an SSDP type, so the rule needs protocol "ssdp"')
         raise RuleError("service_type must look like _name._tcp or _name._udp, or be *")
     return text
 

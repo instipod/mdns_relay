@@ -226,3 +226,8 @@ class TestSsdpApi(WebCase):
     async def test_invalid_ssdp_target_rejected(self):
         response = await self.client.post("/api/rules", json={**RULE, "protocol": "ssdp"})
         self.assertEqual(response.status, 400)
+
+    async def test_web_interface_files_are_revalidated(self):
+        for path in ("/", "/static/app.js"):
+            response = await self.client.get(path)
+            self.assertEqual(response.headers["Cache-Control"], "no-cache")

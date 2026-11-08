@@ -220,7 +220,7 @@ function updateRuleHints() {
   const ssdp = form.elements.protocol.value === "ssdp";
   form.elements.service_type.placeholder = ssdp ? "urn:schemas-upnp-org:device:MediaServer:1" : "_airplay._tcp";
   $("rule-type-hint").textContent = ssdp
-    ? "A search target such as upnp:rootdevice or a urn:, or * for everything."
+    ? "A search target such as upnp:rootdevice, roku:ecp or a urn:, or * for everything."
     : "Use the exact type, or * for every service type.";
   $("rule-instance-hint").textContent = ssdp
     ? "A USN or pattern, such as uuid:1234* . Use * for all devices."
@@ -510,6 +510,12 @@ $("activity-filter").addEventListener("change", renderActivity);
 $("add-rule").addEventListener("click", () => openRuleDialog());
 $("rule-form").addEventListener("submit", submitRule);
 $("rule-protocol").addEventListener("change", updateRuleHints);
+$("rule-form").elements.service_type.addEventListener("input", (event) => {
+  if (/^(urn|uuid|upnp):/i.test(event.target.value.trim())) {
+    $("rule-protocol").value = "ssdp";
+    updateRuleHints();
+  }
+});
 $("rule-cancel").addEventListener("click", () => $("rule-dialog").close());
 $("login-form").addEventListener("submit", submitLogin);
 $("login-dialog").addEventListener("cancel", (event) => event.preventDefault());

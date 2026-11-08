@@ -92,6 +92,9 @@ class WebApi:
             "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
+        if path == "/" or path.startswith("/static/"):
+            # Revalidate, so an upgrade can't leave an old script talking to a new server.
+            response.headers["Cache-Control"] = "no-cache"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
