@@ -96,7 +96,9 @@ function plural(count, word) {
 
 function renderServices() {
   const query = $("service-search").value.trim().toLowerCase();
+  const filter = $("service-filter").value;
   const matches = state.services.filter((service) => {
+    if (filter !== "all" && (service.relayed_to.length > 0) !== (filter === "relayed")) return false;
     if (!query) return true;
     return [service.instance, service.service_type, service.protocol, service.iface, service.host, ...service.addresses]
       .some((value) => value && value.toLowerCase().includes(query));
@@ -142,7 +144,7 @@ function renderServices() {
       ? "No services discovered yet. Discovery queries are being sent on active interfaces."
       : "No services discovered yet. Services will appear when devices announce themselves.";
   } else {
-    empty.textContent = "No services match your search.";
+    empty.textContent = "No services match your search or filter.";
   }
 }
 
@@ -503,6 +505,7 @@ document.addEventListener("pointerup", pointerReleased);
 document.addEventListener("pointercancel", pointerReleased);
 setInterval(scheduleRefresh, 15000);  // Keeps "Seen" ages current on a quiet network.
 $("service-search").addEventListener("input", renderServices);
+$("service-filter").addEventListener("change", renderServices);
 $("activity-filter").addEventListener("change", renderActivity);
 $("add-rule").addEventListener("click", () => openRuleDialog());
 $("rule-form").addEventListener("submit", submitRule);
